@@ -1,0 +1,40 @@
+name: 'Vigile AI Security Scan'
+description: 'Scan MCP servers and agent skills for security issues using the Vigile trust registry'
+author: 'Vigile AI'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'Vigile API key (optional — for uploading results to vigile.dev)'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Severity threshold to fail the CI check: critical, high, medium, low'
+    required: false
+    default: 'critical'
+  scan-paths:
+    description: 'Comma-separated paths to scan for MCP configs (default: auto-detect)'
+    required: false
+    default: ''
+  upload-results:
+    description: 'Upload scan results to Vigile API (requires api-key)'
+    required: false
+    default: 'true'
+
+outputs:
+  trust-score:
+    description: 'Overall trust score (0-100)'
+  trust-level:
+    description: 'Trust level: trusted, caution, risky, dangerous'
+  findings-count:
+    description: 'Total number of findings'
+  critical-count:
+    description: 'Number of critical findings'
+  high-count:
+    description: 'Number of high-severity findings'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

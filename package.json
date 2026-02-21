@@ -1,0 +1,21 @@
+{
+  "name": "vigile-scan-action",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitHub Action for Vigile AI Security scanning of MCP servers and agent skills",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --minify",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "@actions/glob": "^0.5.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
