@@ -27,7 +27,6 @@ jobs:
 
       - name: Build (compile from source)
         run: npm run build
-        if: hashFiles('src/index.ts') != ''
 
       - name: Security audit (production deps)
         run: npm audit --omit=dev --audit-level=high
