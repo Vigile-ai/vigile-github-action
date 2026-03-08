@@ -6,7 +6,9 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/index.ts -o dist --minify",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "audit:check": "npm audit --omit=dev --audit-level=high",
+    "audit:all": "npm audit --audit-level=moderate"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
