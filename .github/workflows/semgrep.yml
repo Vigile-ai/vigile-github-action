@@ -1,0 +1,27 @@
+name: Semgrep SAST
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Weekly scan catches findings from newly added Semgrep rules
+  schedule:
+    - cron: "0 14 * * 1"
+
+jobs:
+  semgrep:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: >
+          semgrep scan
+          --config auto
+          --error
+          --exclude 'dist'
+          --exclude 'node_modules'

@@ -1,0 +1,50 @@
+name: Release Provenance
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build-and-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build action dist
+        run: npm run build
+
+      - name: Security audit
+        run: npm run audit:check
+
+      - name: Validate release files
+        run: |
+          test -f action.yml
+          test -f dist/index.js
+
+      - name: Create release artifact
+        run: |
+          files=(action.yml dist)
+          if [ -f README.md ]; then
+            files+=(README.md)
+          fi
+          tar -czf vigile-scan-action-${GITHUB_REF_NAME}.tgz "${files[@]}"
+
+      - name: Attest release artifact
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: vigile-scan-action-${{ github.ref_name }}.tgz
