@@ -48,3 +48,17 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: vigile-scan-action-${{ github.ref_name }}.tgz
+
+      - name: Generate Release Evidence Pack
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/generate_evidence_pack.py --output EVIDENCE_PACK.md --strict
+
+      - name: Upload Release Evidence Pack
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-pack-${{ github.run_id }}
+          path: EVIDENCE_PACK.md
+          if-no-files-found: error
