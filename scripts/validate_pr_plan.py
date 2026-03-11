@@ -10,9 +10,12 @@ import sys
 from pathlib import Path
 
 PLAN_ID_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d{1,5}\b")
+GUARDRAIL_ID_PATTERN = re.compile(r"\bAGR-\d{3}\b")
 CODE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".kt", ".swift", ".sql", ".sh"
 }
+ALLOWED_CONTRACT_IMPACTS = {"none", "backward-compatible", "breaking"}
+ALLOWED_PHI_IMPACTS = {"none", "adjacent", "direct"}
 
 
 def _read_event(path: Path) -> dict:
@@ -51,6 +54,30 @@ def _is_meaningful(text: str) -> bool:
         "same as above",
     }
     return stripped not in placeholders and "<!--" not in stripped
+
+
+def _extract_named_field(section: str, label: str) -> str:
+    pattern = re.compile(
+        rf"^\s*(?:[-*]\s*)?{re.escape(label)}\s*:\s*(.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    match = pattern.search(section)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _normalize_contract_impact(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    normalized = re.sub(r"\s+", "-", normalized)
+    if normalized == "backwardcompatible":
+        normalized = "backward-compatible"
+    return normalized
+
+
+def _normalize_phi_impact(value: str) -> str:
+    token = re.split(r"[\s,;|]+", value.strip().lower(), maxsplit=1)[0]
+    return token
 
 
 def _changed_files(base: str, head: str) -> list[str]:
@@ -109,6 +136,7 @@ def main() -> int:
     tests_section = _extract_section(body, "Test Evidence")
     commands_section = _extract_section(body, "Validation Commands")
     risk_section = _extract_section(body, "Risk & Rollback")
+    architecture_section = _extract_section(body, "Architecture Alignment")
 
     if not (
         PLAN_ID_PATTERN.search(title)
@@ -134,6 +162,45 @@ def main() -> int:
 
     code_changed = any(_is_code_file(path) for path in files)
     tests_changed = any(_is_test_file(path) for path in files)
+
+    if code_changed:
+        if not _is_meaningful(architecture_section):
+            errors.append(
+                "Architecture Alignment section is required for code changes "
+                "(Guardrails, Contract Impact, Cross-Repo Impact, PHI Boundary Impact, Why now)."
+            )
+        else:
+            guardrails_field = _extract_named_field(architecture_section, "Guardrails")
+            contract_field = _extract_named_field(architecture_section, "Contract Impact")
+            cross_repo_field = _extract_named_field(architecture_section, "Cross-Repo Impact")
+            phi_field = _extract_named_field(architecture_section, "PHI Boundary Impact")
+            why_now_field = _extract_named_field(architecture_section, "Why now")
+
+            if not GUARDRAIL_ID_PATTERN.search(guardrails_field):
+                errors.append("Architecture Alignment must include at least one AGR-* guardrail ID.")
+
+            normalized_contract = _normalize_contract_impact(contract_field)
+            if normalized_contract not in ALLOWED_CONTRACT_IMPACTS:
+                errors.append(
+                    "Contract Impact must be one of: none, backward-compatible, breaking."
+                )
+
+            if not _is_meaningful(cross_repo_field):
+                errors.append("Cross-Repo Impact is required in Architecture Alignment.")
+
+            normalized_phi = _normalize_phi_impact(phi_field)
+            if normalized_phi not in ALLOWED_PHI_IMPACTS:
+                errors.append("PHI Boundary Impact must be one of: none, adjacent, direct.")
+            elif normalized_phi == "direct":
+                lowered_phi = phi_field.lower()
+                if not any(token in lowered_phi for token in ("isolat", "separate", "module", "adapter")):
+                    errors.append(
+                        "PHI Boundary Impact=direct requires explicit isolation approach "
+                        "(e.g., separate module/adapter boundary)."
+                    )
+
+            if not _is_meaningful(why_now_field):
+                errors.append("Why now is required in Architecture Alignment.")
 
     if code_changed and not tests_changed:
         combined = f"{tests_section}\n{commands_section}".lower()
