@@ -19,7 +19,7 @@ DEFAULT_TIMEOUT_SECONDS = 20
 
 
 WORKFLOW_MATCHERS = {
-    "plan_guard": lambda run: ("/plan-guard.yml" in _run_path(run)) or (_run_name(run) == "plan guard"),
+    "plan_guard": lambda run: ("/plan-guard.yml" in _run_path(run)) or (_run_name(run) in {"plan guard", "pr hygiene"}),
     "ci": lambda run: "/ci.yml" in _run_path(run),
     "semgrep": lambda run: ("/semgrep.yml" in _run_path(run)) or ("semgrep" in _run_name(run)),
     "release": lambda run: "/release-provenance.yml" in _run_path(run),
@@ -311,7 +311,7 @@ def _write_markdown(
         url = entry["url"] if entry["url"] else "(missing)"
         lines.append(f"| {label} | `{entry['status']}` | {url} | {notes} |")
 
-    row("Plan Guard", "plan_guard", "PR contract and architecture alignment gate")
+    row("PR Hygiene", "plan_guard", "PR template and public-hygiene gate")
     row("CI", "ci", "Build, tests, and CI checks")
     row("Semgrep SAST", "semgrep", "Static analysis")
     row("Audit", "audit", "Audit step is executed within linked run")

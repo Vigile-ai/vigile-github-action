@@ -1,4 +1,4 @@
-name: Plan Guard
+name: PR Hygiene
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  plan-guard:
+  pr-hygiene:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate plan + test contract
+      - name: Validate PR template + public hygiene
         run: |
           python3 scripts/validate_pr_plan.py \
             --event-path "$GITHUB_EVENT_PATH" \
