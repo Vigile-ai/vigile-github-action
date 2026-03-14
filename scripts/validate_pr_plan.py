@@ -5,27 +5,27 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
-PLAN_ID_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d{1,5}\b")
-GUARDRAIL_ID_PATTERN = re.compile(r"\bAGR-\d{3}\b")
-CODE_EXTENSIONS = {
-    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".kt", ".swift", ".sql", ".sh"
-}
-ALLOWED_CONTRACT_IMPACTS = {"none", "backward-compatible", "breaking"}
-ALLOWED_PHI_IMPACTS = {"none", "adjacent", "direct"}
+ALLOWED_TYPES = {"bug", "feature", "refactor", "detection", "security", "dependency", "docs"}
+FORBIDDEN_PUBLIC_MARKER_RE = re.compile(
+    r"(?i)(ENG-[0-9]{1,5}|\[CODEX\]|\[CLAUDE\]|TASKS_COMPLETED\.md|SESSION\.md|NOW\.md|WAITING\.md|DONE\.md|"
+    r"DECISIONS_LOG\.md|SOURCE_OF_TRUTH\.md|SOLO_FOUNDER_OPERATING_MODE\.md|MASTER_PLAN(?:_EXECUTION)?\.md|"
+    r"STRATEGY\.md|memory/SESSION\.md|SOUL suggestion|source[-_ ]of[-_ ]truth|decision log|decision journal|"
+    r"project memory|pre-merge checklist|runbook|operating mode|doc-state lag)"
+)
+PLACEHOLDERS = {"tbd", "n/a", "na", "-", "todo", "same as above"}
 
 
 def _read_event(path: Path) -> dict:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _get_pr_text(event: dict) -> tuple[str, str]:
+def _get_pr_text_from_event(event: dict) -> tuple[str, str]:
     pr = event.get("pull_request") or {}
-    title = pr.get("title") or ""
-    body = pr.get("body") or ""
+    title = str(pr.get("title") or "")
+    body = str(pr.get("body") or "")
     return title, body
 
 
@@ -40,182 +40,103 @@ def _extract_section(body: str, heading: str) -> str:
     return match.group(1).strip()
 
 
+def _has_content(text: str) -> bool:
+    stripped = text.strip()
+    return bool(stripped) and "<!--" not in stripped
+
+
 def _is_meaningful(text: str) -> bool:
     stripped = text.strip().lower()
-    if not stripped:
+    if not stripped or "<!--" in stripped:
         return False
-    placeholders = {
-        "tbd",
-        "n/a",
-        "na",
-        "none",
-        "-",
-        "todo",
-        "same as above",
-    }
-    return stripped not in placeholders and "<!--" not in stripped
+    return stripped not in PLACEHOLDERS
 
 
-def _extract_named_field(section: str, label: str) -> str:
-    pattern = re.compile(
-        rf"^\s*(?:[-*]\s*)?{re.escape(label)}\s*:\s*(.+?)\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    match = pattern.search(section)
-    if not match:
-        return ""
-    return match.group(1).strip()
+def _normalize_type(value: str) -> str:
+    token = re.split(r"[\s|,/;]+", value.strip().lower(), maxsplit=1)[0]
+    return token.strip("-* ")
 
 
-def _normalize_contract_impact(value: str) -> str:
-    normalized = value.strip().lower().replace("_", "-")
-    normalized = re.sub(r"\s+", "-", normalized)
-    if normalized == "backwardcompatible":
-        normalized = "backward-compatible"
-    return normalized
+def _resolve_local_text(args: argparse.Namespace) -> tuple[str, str]:
+    title = args.title.strip()
+    body = args.body
+    if args.body_file:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    return title, body
 
 
-def _normalize_phi_impact(value: str) -> str:
-    token = re.split(r"[\s,;|]+", value.strip().lower(), maxsplit=1)[0]
-    return token
-
-
-def _changed_files(base: str, head: str) -> list[str]:
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}..{head}"],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-def _is_code_file(path: str) -> bool:
-    p = Path(path)
-    if p.suffix.lower() not in CODE_EXTENSIONS:
-        return False
-    if any(part in {"tests", "test", "__tests__", "spec"} for part in p.parts):
-        return False
-    return True
-
-
-def _is_test_file(path: str) -> bool:
-    p = Path(path)
-    lower = path.lower()
-    return (
-        any(part in {"tests", "test", "__tests__", "spec"} for part in p.parts)
-        or lower.endswith("_test.py")
-        or lower.endswith(".spec.ts")
-        or lower.endswith(".spec.tsx")
-        or lower.endswith(".test.ts")
-        or lower.endswith(".test.tsx")
-        or lower.endswith(".test.js")
-        or lower.endswith(".spec.js")
-    )
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate PR plan/test contract")
-    parser.add_argument("--event-path", default="", help="Path to GitHub event payload")
-    parser.add_argument("--base", required=True, help="Base commit sha")
-    parser.add_argument("--head", required=True, help="Head commit sha")
-    args = parser.parse_args()
+def _load_pr_text(args: argparse.Namespace) -> tuple[str, str]:
+    if args.title.strip() or args.body or args.body_file:
+        return _resolve_local_text(args)
 
     event_path = Path(args.event_path or os.environ.get("GITHUB_EVENT_PATH", ""))
     if not event_path.exists():
-        print("ERROR: missing GitHub event payload path", file=sys.stderr)
-        return 1
-
+        raise FileNotFoundError("missing GitHub event payload path")
     event = _read_event(event_path)
-    title, body = _get_pr_text(event)
+    return _get_pr_text_from_event(event)
+
+
+def _find_forbidden_markers(text: str) -> list[str]:
+    return sorted({match.group(0) for match in FORBIDDEN_PUBLIC_MARKER_RE.finditer(text)})
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate PR title/body hygiene and template contract")
+    parser.add_argument("--event-path", default="", help="Path to GitHub event payload")
+    parser.add_argument("--title", default="", help="PR title for local validation")
+    parser.add_argument("--body", default="", help="PR body text for local validation")
+    parser.add_argument("--body-file", default="", help="Path to PR body file for local validation")
+    parser.add_argument("--base", default="", help="Compatibility arg for repo workflows")
+    parser.add_argument("--head", default="", help="Compatibility arg for repo workflows")
+    args = parser.parse_args()
+
+    try:
+        title, body = _load_pr_text(args)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     errors: list[str] = []
 
-    plan_section = _extract_section(body, "Plan ID")
-    scope_section = _extract_section(body, "Scope")
-    tests_section = _extract_section(body, "Test Evidence")
-    commands_section = _extract_section(body, "Validation Commands")
-    risk_section = _extract_section(body, "Risk & Rollback")
-    architecture_section = _extract_section(body, "Architecture Alignment")
+    if not title.strip():
+        errors.append("PR title is required.")
 
-    if not (
-        PLAN_ID_PATTERN.search(title)
-        or PLAN_ID_PATTERN.search(plan_section)
-        or PLAN_ID_PATTERN.search(body)
-    ):
-        errors.append("Missing Plan ID (expected format like ENG-101) in title or PR body.")
+    summary_section = _extract_section(body, "Summary")
+    type_section = _extract_section(body, "Type")
+    security_section = _extract_section(body, "Security Impact")
+    breaking_section = _extract_section(body, "Breaking Changes")
 
-    if not _is_meaningful(scope_section):
-        errors.append("Scope section is required and must describe in-scope and out-of-scope work.")
-    if not _is_meaningful(tests_section):
-        errors.append("Test Evidence section is required and cannot be placeholder text.")
-    if not _is_meaningful(commands_section):
-        errors.append("Validation Commands section is required with real commands/results.")
-    if not _is_meaningful(risk_section):
-        errors.append("Risk & Rollback section is required.")
+    if not _is_meaningful(summary_section):
+        errors.append("Summary section is required and must describe what changed and why.")
 
-    try:
-        files = _changed_files(args.base, args.head)
-    except subprocess.CalledProcessError as exc:
-        print(exc.stderr, file=sys.stderr)
-        return 1
+    if not _has_content(type_section):
+        errors.append("Type section is required.")
+    else:
+        normalized_type = _normalize_type(type_section)
+        if normalized_type not in ALLOWED_TYPES:
+            errors.append("Type must be one of: bug, feature, refactor, detection, security, dependency, docs.")
 
-    code_changed = any(_is_code_file(path) for path in files)
-    tests_changed = any(_is_test_file(path) for path in files)
+    if not _has_content(security_section):
+        errors.append('Security Impact section is required (use "None." if no impact).')
 
-    if code_changed:
-        if not _is_meaningful(architecture_section):
-            errors.append(
-                "Architecture Alignment section is required for code changes "
-                "(Guardrails, Contract Impact, Cross-Repo Impact, PHI Boundary Impact, Why now)."
-            )
-        else:
-            guardrails_field = _extract_named_field(architecture_section, "Guardrails")
-            contract_field = _extract_named_field(architecture_section, "Contract Impact")
-            cross_repo_field = _extract_named_field(architecture_section, "Cross-Repo Impact")
-            phi_field = _extract_named_field(architecture_section, "PHI Boundary Impact")
-            why_now_field = _extract_named_field(architecture_section, "Why now")
+    if not _has_content(breaking_section):
+        errors.append('Breaking Changes section is required (use "None." if no changes).')
 
-            if not GUARDRAIL_ID_PATTERN.search(guardrails_field):
-                errors.append("Architecture Alignment must include at least one AGR-* guardrail ID.")
+    title_markers = _find_forbidden_markers(title)
+    if title_markers:
+        errors.append(f"PR title contains internal/public-unsafe markers: {', '.join(title_markers)}")
 
-            normalized_contract = _normalize_contract_impact(contract_field)
-            if normalized_contract not in ALLOWED_CONTRACT_IMPACTS:
-                errors.append(
-                    "Contract Impact must be one of: none, backward-compatible, breaking."
-                )
-
-            if not _is_meaningful(cross_repo_field):
-                errors.append("Cross-Repo Impact is required in Architecture Alignment.")
-
-            normalized_phi = _normalize_phi_impact(phi_field)
-            if normalized_phi not in ALLOWED_PHI_IMPACTS:
-                errors.append("PHI Boundary Impact must be one of: none, adjacent, direct.")
-            elif normalized_phi == "direct":
-                lowered_phi = phi_field.lower()
-                if not any(token in lowered_phi for token in ("isolat", "separate", "module", "adapter")):
-                    errors.append(
-                        "PHI Boundary Impact=direct requires explicit isolation approach "
-                        "(e.g., separate module/adapter boundary)."
-                    )
-
-            if not _is_meaningful(why_now_field):
-                errors.append("Why now is required in Architecture Alignment.")
-
-    if code_changed and not tests_changed:
-        combined = f"{tests_section}\n{commands_section}".lower()
-        if all(token not in combined for token in ("manual", "no test", "existing test")):
-            errors.append(
-                "Code changed but no test files changed. Add tests or explain why in Test Evidence."
-            )
+    body_markers = _find_forbidden_markers(body)
+    if body_markers:
+        errors.append(f"PR body contains internal/public-unsafe markers: {', '.join(body_markers)}")
 
     if errors:
-        print("PLAN GUARD FAILED")
+        print("PR HYGIENE FAILED")
         for idx, error in enumerate(errors, start=1):
             print(f"{idx}. {error}")
         return 1
 
-    print("PLAN GUARD PASSED")
+    print("PR HYGIENE PASSED")
     return 0
 
 
